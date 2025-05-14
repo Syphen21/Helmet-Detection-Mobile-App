@@ -1,64 +1,64 @@
 from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from ultralytics import YOLO
-import cv2, numpy as np, shutil, os
+import cv2
+import shutil
+import os
+import io
+import uvicorn
 
-MODEL_PATH      = "best.pt"
-UPLOAD_FOLDER   = "temp_images"
-
+# Initialize app and model
 app = FastAPI()
-model = None
+model = YOLO("best.pt")           # adjust path if needed
+UPLOAD_FOLDER = "temp_images"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-@app.on_event("startup")
-async def load_model():
-    global model
-    model = YOLO(MODEL_PATH)
-    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 @app.get("/")
 def home():
     return {"message": "Helmet Detection API is running!"}
 
+
 @app.post("/predict/")
 async def predict(file: UploadFile = File(...)):
-    try:
-        # save upload
-        file_path = os.path.join(UPLOAD_FOLDER, file.filename)
-        with open(file_path, "wb") as buf:
-            shutil.copyfileobj(file.file, buf)
+    # 1) Save upload to disk
+    fp = os.path.join(UPLOAD_FOLDER, file.filename)
+    with open(fp, "wb") as buf:
+        shutil.copyfileobj(file.file, buf)
 
-        # read & infer
-        img     = cv2.imread(file_path)
-        results = model(img)
+    # 2) Read image and run YOLO inference
+    img = cv2.imread(fp)
+    results = model(img)
 
-        # process boxes
-        detections = []
-        for r in results:
-            for box in r.boxes:
-                x1,y1,x2,y2 = map(int, box.xyxy[0])
-                conf       = float(box.conf[0])
-                cls        = int(box.cls[0])
-                label      = model.names[cls]
-                detections.append({
-                    "class":      label,
-                    "confidence": round(conf,2),
-                    "bbox":       [x1,y1,x2,y2]
-                })
-                # annotate
-                color = (0,255,0) if label=="With Helmet" else (0,0,255)
-                cv2.rectangle(img,(x1,y1),(x2,y2),color,2)
-                cv2.putText(img,f"{label} {conf:.2f}",(x1,y1-10),
-                            cv2.FONT_HERSHEY_SIMPLEX,0.5,color,2)
+    # 3) Draw boxes & labels
+    for r in results:
+        for b in r.boxes:
+            x1, y1, x2, y2 = map(int, b.xyxy[0])
+            cls, conf = int(b.cls[0]), float(b.conf[0])
+            label = model.names[cls]
+            color = (0, 255, 0) if label == "With Helmet" else (0, 0, 255)
+            cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(
+                img,
+                f"{label} {conf:.2f}",
+                (x1, y1 - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                color,
+                2,
+            )
 
-        # save annotated image
-        out_path = os.path.join(UPLOAD_FOLDER, f"detection_{file.filename}")
-        cv2.imwrite(out_path, img)
-        os.remove(file_path)
+    # 4) Cleanup the uploaded file
+    os.remove(fp)
 
-        return JSONResponse({
-            "detections":           detections,
-            "detection_image_path": out_path
-        })
+    # 5) Encode as JPEG and stream back
+    success, encoded = cv2.imencode(".jpg", img)
+    if not success:
+        return JSONResponse({"error": "Image encoding failed"}, status_code=500)
 
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+    return StreamingResponse(io.BytesIO(encoded.tobytes()), media_type="image/jpeg")
+
+
+if __name__ == "__main__":
+    # Run on http://127.0.0.1:8000
+    uvicorn.run(app, host="127.0.0.1", port=8000)
