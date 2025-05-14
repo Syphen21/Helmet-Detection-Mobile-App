@@ -7,7 +7,7 @@ import shutil
 import os
 
 # Load trained YOLO model
-MODEL_PATH = r"/Users/terox/Desktop/ML_Helmet_Detection/best.pt"
+MODEL_PATH = r"best.pt"
 model = YOLO(MODEL_PATH)
 
 # Initialize FastAPI app
