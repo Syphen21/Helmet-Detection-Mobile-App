@@ -1,22 +1,19 @@
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse
 from ultralytics import YOLO
-import cv2
-import numpy as np
-import shutil
-import os
+import cv2, numpy as np, shutil, os
 
-# Load trained YOLO model
-MODEL_PATH = r"best.pt"
-model = YOLO(MODEL_PATH)
+MODEL_PATH      = "best.pt"
+UPLOAD_FOLDER   = "temp_images"
 
-# Initialize FastAPI app
 app = FastAPI()
+model = None
 
-# Ensure temp folder exists
-UPLOAD_FOLDER = "temp_images"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
+@app.on_event("startup")
+async def load_model():
+    global model
+    model = YOLO(MODEL_PATH)
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 @app.get("/")
 def home():
@@ -24,57 +21,44 @@ def home():
 
 @app.post("/predict/")
 async def predict(file: UploadFile = File(...)):
-    """Endpoint to detect helmets in an uploaded image."""
     try:
-        # Save the uploaded file
-        file_path = f"{UPLOAD_FOLDER}/{file.filename}"
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        # save upload
+        file_path = os.path.join(UPLOAD_FOLDER, file.filename)
+        with open(file_path, "wb") as buf:
+            shutil.copyfileobj(file.file, buf)
 
-        # Read image
-        img = cv2.imread(file_path)
-
-        # Run YOLO inference
+        # read & infer
+        img     = cv2.imread(file_path)
         results = model(img)
 
-        # Process results
+        # process boxes
         detections = []
-        for result in results:
-            for box in result.boxes:
-                x1, y1, x2, y2 = map(int, box.xyxy[0])  # Bounding box
-                conf = float(box.conf[0])  # Confidence score
-                cls = int(box.cls[0])  # Class index
-
-                # Add detection details
+        for r in results:
+            for box in r.boxes:
+                x1,y1,x2,y2 = map(int, box.xyxy[0])
+                conf       = float(box.conf[0])
+                cls        = int(box.cls[0])
+                label      = model.names[cls]
                 detections.append({
-                    "class": model.names[cls],  # "With Helmet" or "Without Helmet"
-                    "confidence": round(conf, 2),
-                    "bbox": [x1, y1, x2, y2]
+                    "class":      label,
+                    "confidence": round(conf,2),
+                    "bbox":       [x1,y1,x2,y2]
                 })
+                # annotate
+                color = (0,255,0) if label=="With Helmet" else (0,0,255)
+                cv2.rectangle(img,(x1,y1),(x2,y2),color,2)
+                cv2.putText(img,f"{label} {conf:.2f}",(x1,y1-10),
+                            cv2.FONT_HERSHEY_SIMPLEX,0.5,color,2)
 
-                # Draw bounding box on the image
-                color = (0, 255, 0) if model.names[cls] == "With Helmet" else (0, 0, 255)
-                cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(img, f"{model.names[cls]} {conf:.2f}", (x1, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
-        # Save the detection image
-        detection_image_path = f"{UPLOAD_FOLDER}/detection_{file.filename}"
-        cv2.imwrite(detection_image_path, img)
-
-        # Remove the original uploaded file to save space
+        # save annotated image
+        out_path = os.path.join(UPLOAD_FOLDER, f"detection_{file.filename}")
+        cv2.imwrite(out_path, img)
         os.remove(file_path)
 
-        return JSONResponse(content={
-            "detections": detections,
-            "detection_image_path": detection_image_path
+        return JSONResponse({
+            "detections":           detections,
+            "detection_image_path": out_path
         })
 
     except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8008)
-
-
+        return JSONResponse({"error": str(e)}, status_code=500)
