@@ -153,6 +153,6 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 ## Contact
 For questions or suggestions, feel free to reach out:
-- **GitHub**: [BhavyaPatel9](https://github.com/BhavyaPatel9)
+- **GitHub**: [Jeet Ariwala](https://github.com/Syphen21)
 
 Thank you for exploring the Helmet Detection project! 🚴‍♂️🪖
